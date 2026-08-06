@@ -72,7 +72,7 @@ ARQUIVO_BANCO = "lista_dns.txt"
 GRUPO_FILE = "grupo.txt"
 LINK_LISTA_FIXA = "COLE_O_LINK_DO_SEU_TXT_AQUI"
 
-admin_env = os.getenv("ADMIN_IDS", "7679881390")
+admin_env = os.getenv("ADMIN_IDS", "8716721711")
 ADMIN_IDS = [int(id.strip()) for id in admin_env.split(",") if id.strip().isdigit()]
 
 GET_M3U_LINK = 0

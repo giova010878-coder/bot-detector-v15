@@ -48,16 +48,52 @@ load_dotenv()
 # 🌐 SERVIDOR WEB FALSO PARA ENGANAR O RENDER
 # ==========================================
 class DummyHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    def _responder_online(self, incluir_corpo=True):
+        corpo = b"Bot do Giovani esta ONLINE e operante!"
         self.send_response(200)
-        self.send_header('Content-type', 'text/html')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(corpo)))
         self.end_headers()
-        self.wfile.write(b"Bot do Giovani esta ONLINE e operante!")
+        if incluir_corpo:
+            self.wfile.write(corpo)
+
+    def do_GET(self):
+        self._responder_online(incluir_corpo=True)
+
+    # O Render usa HEAD para verificar a saude do Web Service.
+    def do_HEAD(self):
+        self._responder_online(incluir_corpo=False)
+
+    def log_message(self, format, *args):
+        # Mantem os logs do Render limpos sem esconder erros do bot.
+        return
+
+class RenderHTTPServer(HTTPServer):
+    allow_reuse_address = True
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server = RenderHTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
+
+# Impede que o mesmo container inicie duas copias do polling por engano.
+_instance_lock = None
+
+def adquirir_bloqueio_de_instancia():
+    global _instance_lock
+    try:
+        import fcntl
+        _instance_lock = open("/tmp/giovani_detector.lock", "w")
+        fcntl.flock(_instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _instance_lock.write(str(os.getpid()))
+        _instance_lock.flush()
+    except BlockingIOError:
+        print("❌ Outra instancia do GIOVANI DETECTOR ja esta rodando neste servidor.")
+        sys.exit(1)
+    except (ImportError, OSError) as erro:
+        # O Render usa Linux e suporta fcntl. Em outro sistema, o bot segue
+        # funcionando normalmente caso esse bloqueio nao esteja disponivel.
+        print(f"⚠️ Bloqueio de instancia indisponivel: {erro}")
 
 # ==========================================
 # 🛡️ CONFIGURAÇÃO DO BOT E CONTROLE PRIVADO
@@ -303,7 +339,14 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         await context.bot.send_message(chat_id=chat_id, text="\n".join(relatorio), parse_mode='Markdown', message_thread_id=thread_id)
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    print(f"⚠️ Ocorreu um erro interno de conexão: {context.error}")
+    erro = str(context.error)
+    if "terminated by other getUpdates request" in erro or "Conflict" in erro:
+        print(
+            "⚠️ CONFLITO DO TELEGRAM: existe outra copia usando o mesmo token. "
+            "Pare o outro servico/computador e deixe somente esta instancia ativa."
+        )
+        return
+    print(f"⚠️ Ocorreu um erro interno de conexão: {erro}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -373,6 +416,7 @@ async def gerenciar_atualizacao_documento(update: Update, context: ContextTypes.
         await update.message.reply_text(f"📥 **Banco Atualizado Manualmente!**\n📦 {total} domínios salvos em cache.", message_thread_id=thread_id)
 
 def main():
+    adquirir_bloqueio_de_instancia()
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
     nest_asyncio.apply()

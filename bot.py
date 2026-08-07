@@ -17,9 +17,8 @@ def instalar_modulo(package, pip_name=None):
         print(f"📦 O módulo '{package}' não está instalado. Instalando '{pip_name}' automaticamente...")
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name])
-            print(f"✅ '{pip_name}' instalado com sucesso!")
-        except Exception as e:
-            print(f"❌ Erro ao instalar via pip: {str(e)}")
+        except:
+            pass
 
 instalar_modulo("telegram", "python-telegram-bot")
 instalar_modulo("aiohttp")
@@ -65,7 +64,6 @@ def run_dummy_server():
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
-    print("❌ ERRO: Token do Telegram não encontrado. Verifique seu arquivo .env!")
     sys.exit(1)
 
 ARQUIVO_BANCO = "lista_dns.txt"
@@ -76,7 +74,6 @@ admin_env = os.getenv("ADMIN_IDS", "8716721711")
 ADMIN_IDS = [int(id.strip()) for id in admin_env.split(",") if id.strip().isdigit()]
 
 GET_M3U_LINK = 0
-
 DNS_BLACKLIST = ["brothersplay.com", "www.brothersplay.com"]
 DOMINIOS_CURINGAS = ["adultiptv.net", "iptvxxx.net", "dimaiptv.com"]
 
@@ -242,7 +239,7 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         except: return
         dados_conta["user"], dados_conta["pass"] = usuario, senha
 
-        progresso_msg = await context.bot.send_message(chat_id=chat_id, text=f"🚀 **GIOVANI V15.6: INTEGRANDO...**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛑 PARAR", callback_data="stop_scan")]]), message_thread_id=thread_id)
+        progresso_msg = await context.bot.send_message(chat_id=chat_id, text=f"🚀 **GIOVANI V15.6: INTEGRANDO E FILTRANDO ROTAS...**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛑 PARAR CONSULTA", callback_data="stop_scan")]]), message_thread_id=thread_id)
         
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)) as session:
             teste_alvo = await testar_url_completo(session, dns_alvo, usuario, senha)
@@ -263,10 +260,29 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         consultas_ativas.pop(chat_id, None)
 
         status_dns_alvo = "ON" if status_dns_alvo == "OFF" and espelhos_de_ouro else status_dns_alvo
-        relatorio = [f"🛡 **GIOVANI DETECTOR V15.6 SMART FILTER**", f"────────────────────", f"🛰 DNS ALVO: `{dns_alvo}` {'(🟢 ONLINE)' if status_dns_alvo == 'ON' else '(🔴 OFFLINE)'}"]
+        relatorio = [
+            f"🛡 **GIOVANI DETECTOR V15.6 SMART FILTER**",
+            f"────────────────────",
+            f"👤 REQUISITANTE: `{user_id}`",
+            f"📅 DATA/HORA: `{dt_hr}`",
+            f"────────────────────",
+            f"🛰 DNS ALVO: `{dns_alvo}` {'(🟢 ONLINE)' if status_dns_alvo == 'ON' else '(🔴 OFFLINE)'}",
+            f"📍 IP: `{dados_rede['ip']}` | 📡 HOST: `{dados_rede['hostname']}`",
+            f"🏢 ISP: `{dados_rede['isp']}` | 🌍 `{dados_rede['pais']}`",
+            f"────────────────────",
+            f"👤 USUÁRIO: `{dados_conta['user']}` | 🔑 SENHA: `{dados_conta['pass']}`",
+            f"🏷 TIPO DA CONTA: `{dados_conta['tipo']}`",
+            f"📅 CRIADA EM: `{dados_conta['criacao']}` | ⏳ VENCE EM: `{dados_conta['vence']}`",
+            f"👥 CONEXÕES ATIVAS: `{dados_conta['ativas']}/{dados_conta['max']}`",
+            f"📺 CANAIS: `{canais_alvo}` | 🎬 FILMES (VOD): `{dados_conta['vod']}` | 🎞 SÉRIES: `{dados_conta['series']}`",
+            f"⚙️ FORMATOS SUPORTADOS: `{dados_conta['formatos']}`",
+            f"────────────────────"
+        ]
         if espelhos_de_ouro:
             relatorio.append(f"🔥 ESPELHOS DE OURO CONFIRMADOS ({len(espelhos_de_ouro)}):")
-            for item in espelhos_de_ouro[:40]: relatorio.append(f" └🔗 `{item['dns']}` 📺 🔥")
+            for item in espelhos_de_ouro[:40]: relatorio.append(f" └🔗 `{item['dns']}` 📺 🔥 LIBERADA")
+        else:
+            relatorio.append(" ❌ Nenhum espelho válido com canais ativos respondeu para este login.")
         await context.bot.send_message(chat_id=chat_id, text="\n".join(relatorio), parse_mode='Markdown', message_thread_id=thread_id)
 
     else:
@@ -293,11 +309,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     thread_id = update.message.message_thread_id if hasattr(update.message, "message_thread_id") else None
     salvar_grupo_id(chat.id, thread_id)
-    await update.message.reply_text("🛡️ **GIOVANI DETECTOR V15.6 SMART FILTER OPERANTE**", message_thread_id=thread_id)
+    await update.message.reply_text(
+        "🛡️ **GIOVANI DETECTOR V15.6 SMART FILTER OPERANTE**\n\n"
+        "• Envie um **domínio limpo** para verificar aproximação por texto.\n"
+        "• Use o comando `/dnschecker` para rodar a varredura inteligente completa.",
+        message_thread_id=thread_id if thread_id else None
+    )
+
+async def autorizar7(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat.type not in ["group", "supergroup"]: return
+    membro = await context.bot.get_chat_member(chat.id, user.id)
+    if membro.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER] and user.id not in ADMIN_IDS: return
+    thread_id = update.message.message_thread_id if hasattr(update.message, "message_thread_id") else None
+    salvar_grupo_id(chat.id, thread_id)
+    await update.message.reply_text(f"✅ Grupo Autorizado com Sucesso!", message_thread_id=thread_id)
+
+async def escutar_texto_direto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_autorizacao(update, context): return
+    msg = update.message.text
+    if msg and ("." in msg or "http" in msg) and not msg.startswith("/"):
+        if "get.php" in msg:
+            await update.message.reply_text("💡 Para testar listas M3U completas, use primeiro o comando `/dnschecker`.")
+            return
+        await processar_giovani_hibrido(msg, update.message.from_user.id, context, update.message.chat_id)
 
 async def dnschecker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_autorizacao(update, context): return ConversationHandler.END
-    await update.message.reply_text("📥 **Aguardando link M3U ativo...**")
+    await update.message.reply_text("📥 **Aguardando link M3U ativo para varredura...**")
     return GET_M3U_LINK
 
 async def receber_m3u(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -309,12 +349,30 @@ async def receber_m3u(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     if chat_id in consultas_ativas:
         consultas_ativas[chat_id] = False
-        await update.message.reply_text("🛑 Comando de parada enviado.")
+        await update.message.reply_text("🛑 Comando de parada enviado ao motor.")
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.message.chat_id
+    if query.data == "stop_scan":
+        if chat_id in consultas_ativas:
+            consultas_ativas[chat_id] = False
+            await query.edit_message_text("🛑 Varredura interrompida. Aguardando finalização...")
+
+async def gerenciar_atualizacao_documento(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_autorizacao(update, context): return
+    _, thread_id = obter_grupo_id()
+    if update.message.document:
+        await (await update.message.document.get_file()).download_to_drive(ARQUIVO_BANCO)
+        with open(ARQUIVO_BANCO, "r", encoding="utf-8", errors="ignore") as f:
+            total = len(extrair_hosts(f.read()))
+        await update.message.reply_text(f"📥 **Banco Atualizado Manualmente!**\n📦 {total} domínios salvos em cache.", message_thread_id=thread_id)
 
 def main():
-    # Inicia o Servidor Falso em uma thread paralela
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
     nest_asyncio.apply()
@@ -329,7 +387,12 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancelar", cancelar))
+    app.add_handler(CommandHandler("autorizar7", autorizar7))
     app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL, gerenciar_atualizacao_documento))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), escutar_texto_direto))
+    
     app.add_error_handler(error_handler)
 
     print("✅ GIOVANI DETECTOR V15.6 SMART FILTER ONLINE")

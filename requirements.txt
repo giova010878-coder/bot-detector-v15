@@ -1,4 +1,0 @@
-python-telegram-bot
-aiohttp
-nest_asyncio
-python-dotenv

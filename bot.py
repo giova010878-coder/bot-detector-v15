@@ -36,7 +36,6 @@ if not TOKEN:
     sys.exit(1)
 
 ARQUIVO_BANCO = "lista_dns.txt"
-GET_M3U_LINK = 0
 
 # ==========================================
 # 🛠 FUNÇÕES DE SUPORTE
@@ -45,7 +44,7 @@ def extrair_hosts(texto):
     linhas = texto.split('\n')
     hosts = []
     for line in linhas:
-        host = re.sub(r'https?://', '', line.replace(",", " ").strip()).split('/')[0].split('?')[0].strip().lower()
+        host = re.sub(r'https?://', '', line.replace(",", " ").strip()).split('/')[0].split('?')[0].split(':')[0].strip().lower()
         if "." in host and len(host) > 4: hosts.append(host)
     return list(set(hosts))
 
@@ -66,15 +65,25 @@ async def testar_url(session, dns, user, password):
 # ==========================================
 async def processar_giovani_hibrido(dados, user_id, context, chat_id):
     inicio = time.time()
-    params = parse_qs(urlparse(dados).query)
+    
+    dados_limpos = dados.strip()
+    parsed_url = urlparse(dados_limpos)
+    params = parse_qs(parsed_url.query)
+    
     user = params.get('username', [''])[0]
     password = params.get('password', [''])[0]
     
     if not user or not password:
-        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto.")
+        match_user = re.search(r'username=([^&]+)', dados_limpos)
+        match_pass = re.search(r'password=([^&]+)', dados_limpos)
+        if match_user: user = match_user.group(1)
+        if match_pass: password = match_pass.group(1)
+
+    if not user or not password:
+        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto. Certifique-se de enviar o link contendo username e password.")
         return
 
-    dns_alvo = urlparse(dados).hostname
+    dns_alvo = parsed_url.hostname or dados_limpos.split('/')[2].split(':')[0]
     
     if not os.path.exists(ARQUIVO_BANCO):
         with open(ARQUIVO_BANCO, "w") as f: f.write("")
@@ -135,16 +144,12 @@ async def erro_handler(update, context):
 # ==========================================
 # 🏁 MAIN
 # ==========================================
-# ==========================================
-# 🏁 MAIN CORRIGIDO (Com /start)
-# ==========================================
 def main():
     threading.Thread(target=run_dummy_server, daemon=True).start()
     print("✅ GIOVANI DETECTOR V15.7 ONLINE")
 
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # Adicionando o comando start para testar a resposta
     async def start(update, context):
         await update.message.reply_text("👋 Olá Giovani! O GIOVANI DETECTOR V15.7 está pronto.\nEnvie um link M3U para começar a análise.")
 
@@ -152,8 +157,6 @@ def main():
     app.add_handler(CommandHandler("dnschecker", lambda u, c: u.message.reply_text("📥 Envie o link M3U completo para iniciar a varredura.")))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u, c: processar_giovani_hibrido(u.message.text, u.message.from_user.id, c, u.message.chat_id)))
     app.add_error_handler(erro_handler)
-
-    app.run_polling(drop_pending_updates=True)
 
     app.run_polling(drop_pending_updates=True)
 

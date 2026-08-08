@@ -310,7 +310,9 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
                 for tarefa_pendente in pendentes:
                     tarefa_pendente.cancel()
                 if pendentes:
-                    await asyncio.gather(*pendentes, return_exceptions=True)
+                    # Nao aguarda cancelamentos presos na resolucao DNS.
+                    # Uma passagem pelo loop entrega o cancelamento sem travar a barra.
+                    await asyncio.sleep(0)
                 resultados = []
                 for tarefa_concluida in concluidas:
                     try:

@@ -302,10 +302,21 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
             for b in range(0, total_banco, 30):
                 if not consultas_ativas.get(chat_id, True): break
                 lote = todas_dns_txt[b:b+30]
-                resultados = await asyncio.gather(
-                    *[testar_url_completo(session, u, usuario, senha) for u in lote],
-                    return_exceptions=True
-                )
+                tarefas_lote = [
+                    asyncio.create_task(testar_url_completo(session, u, usuario, senha))
+                    for u in lote
+                ]
+                concluidas, pendentes = await asyncio.wait(tarefas_lote, timeout=6)
+                for tarefa_pendente in pendentes:
+                    tarefa_pendente.cancel()
+                if pendentes:
+                    await asyncio.gather(*pendentes, return_exceptions=True)
+                resultados = []
+                for tarefa_concluida in concluidas:
+                    try:
+                        resultados.append(tarefa_concluida.result())
+                    except Exception as erro_lote:
+                        resultados.append(erro_lote)
                 for res in resultados:
                     if isinstance(res, BaseException):
                         continue

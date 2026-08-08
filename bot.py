@@ -63,9 +63,13 @@ async def testar_url(session, dns, user, password):
 # ==========================================
 # 🚀 NÚCLEO DE PROCESSAMENTO (FORMATO V15.7)
 # ==========================================
-async def processar_giovani_hibrido(dados, user_id, context, chat_id):
-    inicio = time.time()
+async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dados = update.message.text
+    chat_id = update.message.chat_id
     
+    print(f"📥 MENSAGEM RECEBIDA DO TELEGRAM: {dados}") # Log para ver na tela do Render se chegou algo
+
+    inicio = time.time()
     dados_limpos = dados.strip()
     parsed_url = urlparse(dados_limpos)
     params = parse_qs(parsed_url.query)
@@ -155,7 +159,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dnschecker", lambda u, c: u.message.reply_text("📥 Envie o link M3U completo para iniciar a varredura.")))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u, c: processar_giovani_hibrido(u.message.text, u.message.from_user.id, c, u.message.chat_id)))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), processar_giovani_hibrido))
     app.add_error_handler(erro_handler)
 
     app.run_polling(drop_pending_updates=True)

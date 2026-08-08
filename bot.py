@@ -132,20 +132,21 @@ async def processar_giovani_hibrido(dados, user_id, context, chat_id):
 async def erro_handler(update, context):
     print(f"⚠️ Erro no Telegram: {context.error}")
 
+async def post_init_callback(application):
+    print("✅ GIOVANI DETECTOR V15.7 ONLINE")
+
 # ==========================================
 # 🏁 MAIN
 # ==========================================
 def main():
-    # Inicia o servidor HTTP falso em segundo plano para preencher a porta do Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    app = ApplicationBuilder().token(TOKEN).post_init(lambda a: print("✅ GIOVANI DETECTOR V15.7 ONLINE")).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(post_init_callback).build()
     
     app.add_handler(CommandHandler("dnschecker", lambda u, c: u.message.reply_text("📥 Envie o link M3U completo para iniciar a varredura.")))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u, c: processar_giovani_hibrido(u.message.text, u.message.from_user.id, c, u.message.chat_id)))
     app.add_error_handler(erro_handler)
 
-    # drop_pending_updates=True resolve o conflito matando sessões travadas anteriores
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":

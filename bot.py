@@ -182,7 +182,10 @@ def extrair_hosts(texto):
         for line in linhas:
             linha_limpa = line.replace(",", " ").strip()
             host = re.sub(r'https?://', '', linha_limpa).split('/')[0].split('?')[0].strip().lower()
-            if ":" in host: host = host.split(":")[0]
+            
+            # 🔥 CORREÇÃO 1: Removido o bloqueio que cortava as portas das URLs
+            # if ":" in host: host = host.split(":")[0] 
+            
             if "." in host and len(host) > 4:
                 if host not in DNS_BLACKLIST and not any(curinga in host for curinga in DOMINIOS_CURINGAS):
                     hosts.append(host)
@@ -192,14 +195,12 @@ def extrair_hosts(texto):
 async def testar_url_completo(session, url_banco, user, password):
     url_base = f"http://{url_banco}/player_api.php?username={user}&password={password}"
     try:
-        # 🔥 MUDANÇA: TIMEOUT ULTRA RÁPIDO (2.5s no total). 
-        # Se um painel de IPTV demora mais que isso, não serve pra você.
-        timeout = aiohttp.ClientTimeout(total=2.5, connect=1.0, sock_read=1.5)
+        # 🔥 CORREÇÃO 2: Timeout aumentado para evitar descartar servidores lentos
+        timeout = aiohttp.ClientTimeout(total=8.0, connect=3.0, sock_read=5.0)
         async with session.get(url_base, headers=HEADERS, timeout=timeout, allow_redirects=True) as response:
             if response.status not in [200, 301, 302, 403, 406, 429, 503]:
                 return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
             
-            # Trava de 50KB mantida para não estourar memória com canais .ts
             corpo_bytes = await response.content.read(51200)
             texto_resposta = corpo_bytes.decode('utf-8', errors='ignore')
             
@@ -236,10 +237,10 @@ async def testar_url_completo(session, url_banco, user, password):
     except: 
         return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
 
-# 🔥 MUDANÇA: Guilhotina de tempo reduzida de 5.0s para 3.0s!
 async def testar_url_blindado(session, u, usuario, senha):
     try:
-        return await asyncio.wait_for(testar_url_completo(session, u, usuario, senha), timeout=3.0)
+        # 🔥 CORREÇÃO 2.1: Guilhotina estendida de 3.0s para 10.0s
+        return await asyncio.wait_for(testar_url_completo(session, u, usuario, senha), timeout=10.0)
     except Exception:
         return {"dns": u, "valido": False, "tv": 0, "vod": 0, "series": 0}
 
@@ -269,11 +270,15 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         except: dns_alvo = "N/A"
     else:
         dns_alvo = re.sub(r'https?://', '', dados_entrada.strip().split('\n')[0]).split('/')[0].split('?')[0].strip().lower()
-        if ":" in dns_alvo: dns_alvo = dns_alvo.split(":")[0]
+        
+        # 🔥 CORREÇÃO EXTRA: Manter a porta do DNS alvo se houver
+        # if ":" in dns_alvo: dns_alvo = dns_alvo.split(":")[0]
 
     loop = asyncio.get_running_loop()
     try:
-        dados_rede["ip"] = await loop.run_in_executor(None, socket.gethostbyname, dns_alvo)
+        # Extrai IP desconsiderando a porta caso houver no alvo
+        dns_para_ip = dns_alvo.split(":")[0] if ":" in dns_alvo else dns_alvo
+        dados_rede["ip"] = await loop.run_in_executor(None, socket.gethostbyname, dns_para_ip)
         try: 
             hostname_data = await loop.run_in_executor(None, socket.gethostbyaddr, dados_rede["ip"])
             dados_rede["hostname"] = hostname_data[0]
@@ -308,14 +313,13 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         )
         ultima_atualizacao_progresso = 0.0
         
-        # 🔥 MUDANÇA: Acelerador de conexões aumentado de 50 para 150 simultâneas
-        conector_seguro = aiohttp.TCPConnector(limit=150, limit_per_host=5, ttl_dns_cache=300)
+        # 🔥 CORREÇÃO 4: Limite ajustado de 150 para 80 para garantir estabilidade e evitar Timeout no seu próprio servidor
+        conector_seguro = aiohttp.TCPConnector(limit=80, limit_per_host=3, ttl_dns_cache=300)
         async with aiohttp.ClientSession(connector=conector_seguro) as session:
             teste_alvo = await testar_url_blindado(session, dns_alvo, usuario, senha)
             status_dns_alvo, canais_alvo = ("ON" if teste_alvo["valido"] else "OFF"), teste_alvo.get("tv", 0)
             if teste_alvo["valido"]: dados_conta.update({k: teste_alvo.get(k, "N/A") for k in ["conexoes_ativas", "conexoes_maximas", "vencimento", "tipo_conta", "criacao", "formatos"]})
             
-            # 🔥 MUDANÇA: Agora ele engole Lotes de 100 por vez, não mais 30!
             for b in range(0, total_banco, 100):
                 if not consultas_ativas.get(chat_id, True): break
                 lote = todas_dns_txt[b:b+100]
@@ -326,8 +330,8 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
                 for res in resultados:
                     if isinstance(res, BaseException): continue
                     if res["valido"] and res["dns"] != dns_alvo and not any(c in res["dns"] for c in DOMINIOS_CURINGAS):
-                        if res["tv"] > 5 and (canais_alvo == 0 or abs(res["tv"] - canais_alvo) <= 15 or res["tv"] >= 20):
-                            espelhos_de_ouro.append(res)
+                        # 🔥 CORREÇÃO 3: Se logou, é espelho! Sem filtro exagerado de "res['tv'] > 5"
+                        espelhos_de_ouro.append(res)
 
                 processados = min(b + len(lote), total_banco)
                 agora_progresso = time.monotonic()

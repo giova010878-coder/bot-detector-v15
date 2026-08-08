@@ -192,14 +192,14 @@ def extrair_hosts(texto):
 async def testar_url_completo(session, url_banco, user, password):
     url_base = f"http://{url_banco}/player_api.php?username={user}&password={password}"
     try:
-        # TIMEOUT AGRESSIVO: 3.5s no total, máx 1.5s pra conectar.
-        timeout = aiohttp.ClientTimeout(total=3.5, connect=1.5, sock_read=2.0)
+        # 🔥 MUDANÇA: TIMEOUT ULTRA RÁPIDO (2.5s no total). 
+        # Se um painel de IPTV demora mais que isso, não serve pra você.
+        timeout = aiohttp.ClientTimeout(total=2.5, connect=1.0, sock_read=1.5)
         async with session.get(url_base, headers=HEADERS, timeout=timeout, allow_redirects=True) as response:
             if response.status not in [200, 301, 302, 403, 406, 429, 503]:
                 return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
             
-            # 🔥 O SEGREDO ESTÁ AQUI: Limitamos a leitura a 50KB! 
-            # Isso impede que o bot tente engolir um arquivo .TS de video e trave o servidor (OOM Killer).
+            # Trava de 50KB mantida para não estourar memória com canais .ts
             corpo_bytes = await response.content.read(51200)
             texto_resposta = corpo_bytes.decode('utf-8', errors='ignore')
             
@@ -236,10 +236,10 @@ async def testar_url_completo(session, url_banco, user, password):
     except: 
         return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
 
-# Envolve a busca em um limite duro de tempo do asyncio para evitar travamentos inexplicáveis do aiohttp
+# 🔥 MUDANÇA: Guilhotina de tempo reduzida de 5.0s para 3.0s!
 async def testar_url_blindado(session, u, usuario, senha):
     try:
-        return await asyncio.wait_for(testar_url_completo(session, u, usuario, senha), timeout=5.0)
+        return await asyncio.wait_for(testar_url_completo(session, u, usuario, senha), timeout=3.0)
     except Exception:
         return {"dns": u, "valido": False, "tv": 0, "vod": 0, "series": 0}
 
@@ -308,18 +308,18 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         )
         ultima_atualizacao_progresso = 0.0
         
-        # Conector calibrado para não explodir os limites do OS e respeitar cache de DNS
-        conector_seguro = aiohttp.TCPConnector(limit=50, limit_per_host=5, ttl_dns_cache=300)
+        # 🔥 MUDANÇA: Acelerador de conexões aumentado de 50 para 150 simultâneas
+        conector_seguro = aiohttp.TCPConnector(limit=150, limit_per_host=5, ttl_dns_cache=300)
         async with aiohttp.ClientSession(connector=conector_seguro) as session:
             teste_alvo = await testar_url_blindado(session, dns_alvo, usuario, senha)
             status_dns_alvo, canais_alvo = ("ON" if teste_alvo["valido"] else "OFF"), teste_alvo.get("tv", 0)
             if teste_alvo["valido"]: dados_conta.update({k: teste_alvo.get(k, "N/A") for k in ["conexoes_ativas", "conexoes_maximas", "vencimento", "tipo_conta", "criacao", "formatos"]})
             
-            for b in range(0, total_banco, 30):
+            # 🔥 MUDANÇA: Agora ele engole Lotes de 100 por vez, não mais 30!
+            for b in range(0, total_banco, 100):
                 if not consultas_ativas.get(chat_id, True): break
-                lote = todas_dns_txt[b:b+30]
+                lote = todas_dns_txt[b:b+100]
                 
-                # Executa o lote de forma blindada contra zumbis
                 tarefas_lote = [testar_url_blindado(session, u, usuario, senha) for u in lote]
                 resultados = await asyncio.gather(*tarefas_lote, return_exceptions=True)
                 
@@ -331,8 +331,7 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
 
                 processados = min(b + len(lote), total_banco)
                 agora_progresso = time.monotonic()
-                # 🛡️ Aumentei para 5 segundos para não tomar Block do Telegram por flood de edições
-                if agora_progresso - ultima_atualizacao_progresso >= 5 or processados == total_banco:
+                if agora_progresso - ultima_atualizacao_progresso >= 4 or processados == total_banco:
                     percentual = int((processados / total_banco) * 100) if total_banco else 100
                     blocos = min(10, percentual // 10)
                     barra = "█" * blocos + "░" * (10 - blocos)
@@ -346,7 +345,7 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
                         )
                         ultima_atualizacao_progresso = agora_progresso
                     except Exception as erro_progresso:
-                        pass # Silencia erros de timeout do telegram na ediçao
+                        pass 
 
         try: await progresso_msg.delete()
         except: pass

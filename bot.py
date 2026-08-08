@@ -58,12 +58,10 @@ class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self._responder_online(incluir_corpo=True)
 
-    # O Render usa HEAD para verificar a saude do Web Service.
     def do_HEAD(self):
         self._responder_online(incluir_corpo=False)
 
     def log_message(self, format, *args):
-        # Mantem os logs do Render limpos sem esconder erros do bot.
         return
 
 class RenderHTTPServer(HTTPServer):
@@ -74,7 +72,6 @@ def run_dummy_server():
     server = RenderHTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
 
-# Impede que o mesmo container inicie duas copias do polling por engano.
 _instance_lock = None
 
 def adquirir_bloqueio_de_instancia():
@@ -89,8 +86,6 @@ def adquirir_bloqueio_de_instancia():
         print("❌ Outra instancia do GIOVANI DETECTOR ja esta rodando neste servidor.")
         sys.exit(1)
     except (ImportError, OSError) as erro:
-        # O Render usa Linux e suporta fcntl. Em outro sistema, o bot segue
-        # funcionando normalmente caso esse bloqueio nao esteja disponivel.
         print(f"⚠️ Bloqueio de instancia indisponivel: {erro}")
 
 # ==========================================
@@ -261,10 +256,16 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         dns_alvo = re.sub(r'https?://', '', dados_entrada.strip().split('\n')[0]).split('/')[0].split('?')[0].strip().lower()
         if ":" in dns_alvo: dns_alvo = dns_alvo.split(":")[0]
 
+    # Busca de IP Assíncrona (Evita congelar o bot inteiro)
+    loop = asyncio.get_running_loop()
     try:
-        dados_rede["ip"] = socket.gethostbyname(dns_alvo)
-        try: dados_rede["hostname"] = socket.gethostbyaddr(dados_rede["ip"])[0]
-        except: dados_rede["hostname"] = "Desconhecido"
+        dados_rede["ip"] = await loop.run_in_executor(None, socket.gethostbyname, dns_alvo)
+        try: 
+            hostname_data = await loop.run_in_executor(None, socket.gethostbyaddr, dados_rede["ip"])
+            dados_rede["hostname"] = hostname_data[0]
+        except: 
+            dados_rede["hostname"] = "Desconhecido"
+            
         async with aiohttp.ClientSession() as session_geo:
             async with session_geo.get(f"http://ip-api.com/json/{dados_rede['ip']}?fields=isp,country", timeout=2.0) as res_geo:
                 if res_geo.status == 200:
@@ -293,8 +294,8 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         )
         ultima_atualizacao_progresso = 0.0
         
-        # Limite conservador para evitar excesso de resolucoes DNS no Render.
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=30, ttl_dns_cache=300)) as session:
+        # Limite aumentado para 100 para matar o Efeito Zumbi.
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)) as session:
             teste_alvo = await testar_url_completo(session, dns_alvo, usuario, senha)
             status_dns_alvo, canais_alvo = ("ON" if teste_alvo["valido"] else "OFF"), teste_alvo.get("tv", 0)
             if teste_alvo["valido"]: dados_conta.update({k: teste_alvo.get(k, "N/A") for k in ["conexoes_ativas", "conexoes_maximas", "vencimento", "tipo_conta", "criacao", "formatos"]})
@@ -302,23 +303,15 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
             for b in range(0, total_banco, 30):
                 if not consultas_ativas.get(chat_id, True): break
                 lote = todas_dns_txt[b:b+30]
+                
+                # Gather cuida das tarefas de forma limpa, respeitando os 3.5s do ClientTimeout.
                 tarefas_lote = [
-                    asyncio.create_task(testar_url_completo(session, u, usuario, senha))
+                    testar_url_completo(session, u, usuario, senha)
                     for u in lote
                 ]
-                concluidas, pendentes = await asyncio.wait(tarefas_lote, timeout=6)
-                for tarefa_pendente in pendentes:
-                    tarefa_pendente.cancel()
-                if pendentes:
-                    # Nao aguarda cancelamentos presos na resolucao DNS.
-                    # Uma passagem pelo loop entrega o cancelamento sem travar a barra.
-                    await asyncio.sleep(0)
-                resultados = []
-                for tarefa_concluida in concluidas:
-                    try:
-                        resultados.append(tarefa_concluida.result())
-                    except Exception as erro_lote:
-                        resultados.append(erro_lote)
+                
+                resultados = await asyncio.gather(*tarefas_lote, return_exceptions=True)
+                
                 for res in resultados:
                     if isinstance(res, BaseException):
                         continue
@@ -369,7 +362,8 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         ]
         if espelhos_de_ouro:
             relatorio.append(f"🔥 ESPELHOS DE OURO CONFIRMADOS ({len(espelhos_de_ouro)}):")
-            for item in espelhos_de_ouro[:40]: relatorio.append(f" └🔗 `{item['dns']}` 📺 🔥 LIBERADA")
+            # Reduzido para limite de 30 para não ultrapassar limite de mensagem do Telegram
+            for item in espelhos_de_ouro[:30]: relatorio.append(f" └🔗 `{item['dns']}` 📺 🔥 LIBERADA")
         else:
             relatorio.append(" ❌ Nenhum espelho válido com canais ativos respondeu para este login.")
         await context.bot.send_message(chat_id=chat_id, text="\n".join(relatorio), parse_mode='Markdown', message_thread_id=thread_id)
@@ -482,7 +476,6 @@ async def iniciar_aplicacao(application):
     await baixar_lista_automatica(forçar=True)
 
 async def encerrar_aplicacao(application):
-    # Finaliza as varreduras antes de o python-telegram-bot fechar o event loop.
     for chat_id in list(consultas_ativas):
         consultas_ativas[chat_id] = False
     tarefas = [tarefa for tarefa in scan_tasks if not tarefa.done()]

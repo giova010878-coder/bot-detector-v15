@@ -275,7 +275,18 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         except: return
         dados_conta["user"], dados_conta["pass"] = usuario, senha
 
-        progresso_msg = await context.bot.send_message(chat_id=chat_id, text=f"🚀 **GIOVANI V15.6: INTEGRANDO E FILTRANDO ROTAS...**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛑 PARAR CONSULTA", callback_data="stop_scan")]]), message_thread_id=thread_id)
+        teclado_parar = InlineKeyboardMarkup([[InlineKeyboardButton("🛑 PARAR CONSULTA", callback_data="stop_scan")]])
+        progresso_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "🚀 GIOVANI V15.6: INTEGRANDO E FILTRANDO ROTAS...\n\n"
+                "░░░░░░░░░░ 0%\n"
+                f"🔎 Processados: 0/{total_banco}"
+            ),
+            reply_markup=teclado_parar,
+            message_thread_id=thread_id
+        )
+        ultima_atualizacao_progresso = 0.0
         
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)) as session:
             teste_alvo = await testar_url_completo(session, dns_alvo, usuario, senha)
@@ -290,6 +301,24 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
                     if res["valido"] and res["dns"] != dns_alvo and not any(c in res["dns"] for c in DOMINIOS_CURINGAS):
                         if res["tv"] > 5 and (canais_alvo == 0 or abs(res["tv"] - canais_alvo) <= 15 or res["tv"] >= 20):
                             espelhos_de_ouro.append(res)
+
+                processados = min(b + len(lote), total_banco)
+                agora_progresso = time.monotonic()
+                if agora_progresso - ultima_atualizacao_progresso >= 3 or processados == total_banco:
+                    percentual = int((processados / total_banco) * 100) if total_banco else 100
+                    blocos = min(10, percentual // 10)
+                    barra = "█" * blocos + "░" * (10 - blocos)
+                    try:
+                        await progresso_msg.edit_text(
+                            "🚀 GIOVANI V15.6: INTEGRANDO E FILTRANDO ROTAS...\n\n"
+                            f"{barra} {percentual}%\n"
+                            f"🔎 Processados: {processados}/{total_banco}\n"
+                            f"🔥 Espelhos encontrados: {len(espelhos_de_ouro)}",
+                            reply_markup=teclado_parar
+                        )
+                        ultima_atualizacao_progresso = agora_progresso
+                    except Exception as erro_progresso:
+                        print(f"⚠️ Nao foi possivel atualizar o progresso: {erro_progresso}")
 
         try: await progresso_msg.delete()
         except: pass

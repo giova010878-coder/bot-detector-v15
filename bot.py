@@ -3,8 +3,8 @@ import os, sys, subprocess, threading, asyncio, re, time, json, socket, aiohttp
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,7 +37,6 @@ if not TOKEN:
     sys.exit(1)
 
 ARQUIVO_BANCO = "lista_dns.txt"
-DADOS_USUARIO = {} # Armazena o link temporário do usuário
 
 # ==========================================
 # 🛠 FUNÇÕES DE SUPORTE
@@ -53,7 +52,7 @@ def extrair_hosts(texto):
 async def testar_url(session, dns, user, password):
     url = f"http://{dns}/player_api.php?username={user}&password={password}"
     try:
-        timeout = aiohttp.ClientTimeout(total=3.5)
+        timeout = aiohttp.ClientTimeout(total=4.0)
         async with session.get(url, timeout=timeout) as resp:
             if resp.status != 200: return None
             data = await resp.json()
@@ -63,11 +62,17 @@ async def testar_url(session, dns, user, password):
     return None
 
 # ==========================================
-# 🚀 NÚCLEO DE PROCESSAMENTO TURBO V15.8
+# 🚀 NÚCLEO DE PROCESSAMENTO BLINDADO V15.9
 # ==========================================
-async def executar_varredura(chat_id, context, link_m3u, modo="completa"):
+async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dados = update.message.text
+    chat_id = update.message.chat_id
+    
+    if not ("username=" in dados or "password=" in dados):
+        return # Ignora mensagens que não sejam links M3U
+
     inicio = time.time()
-    dados_limpos = link_m3u.strip()
+    dados_limpos = dados.strip()
     parsed_url = urlparse(dados_limpos)
     params = parse_qs(parsed_url.query)
     
@@ -81,7 +86,7 @@ async def executar_varredura(chat_id, context, link_m3u, modo="completa"):
         if match_pass: password = match_pass.group(1)
 
     if not user or not password:
-        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto. Envie um link com username e password.")
+        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto. Certifique-se de enviar o link contendo username e password.")
         return
 
     dns_alvo = parsed_url.hostname or dados_limpos.split('/')[2].split(':')[0]
@@ -92,21 +97,19 @@ async def executar_varredura(chat_id, context, link_m3u, modo="completa"):
     with open(ARQUIVO_BANCO, "r", encoding="utf-8", errors="ignore") as f: 
         todas_dns = extrair_hosts(f.read())
     
-    if modo == "rapida":
-        todas_dns = todas_dns[:1500]
-
     total_sites = len(todas_dns)
     
     msg_status = await context.bot.send_message(
         chat_id=chat_id, 
-        text=f"🚀 **Iniciando Turbo V15.8** ({modo.upper()})\n📦 Alvo: {total_sites} sites\n⏳ Progresso: 0%"
+        text=f"🚀 **GIOVANI DETECTOR V15.9**\n📦 Varredura iniciada em {total_sites} sites...\n⏳ Progresso: 0%"
     )
 
     espelhos = []
-    connector = aiohttp.TCPConnector(limit=500)
+    # Limitamos a 200 conexões simultâneas para estabilidade total (evita bloqueio por firewall)
+    connector = aiohttp.TCPConnector(limit=200, force_close=True)
     
     async with aiohttp.ClientSession(connector=connector) as session:
-        tamanho_lote = 500
+        tamanho_lote = 200
         total_lotes = (total_sites + tamanho_lote - 1) // tamanho_lote
         lote_atual = 0
 
@@ -128,7 +131,7 @@ async def executar_varredura(chat_id, context, link_m3u, modo="completa"):
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=msg_status.message_id,
-                    text=f"🚀 **Varredura Turbo em Andamento...**\n📊 Progresso: **{porcentagem}%** ({sites_testados}/{total_sites})\n🔥 Espelhos achados: {len(espelhos)}"
+                    text=f"🚀 **Varredura em Andamento...**\n📊 Progresso: **{porcentagem}%** ({sites_testados}/{total_sites})\n🔥 Espelhos achados: {len(espelhos)}"
                 )
             except Exception:
                 pass
@@ -151,14 +154,12 @@ async def executar_varredura(chat_id, context, link_m3u, modo="completa"):
     tempo_total = round(time.time() - inicio, 2)
 
     relatorio = [
-        f"🛡 **GIOVANI DETECTOR V15.8 TURBO**",
+        f"🛡 **GIOVANI DETECTOR V15.9 TURBO**",
         f"────────────────────",
         f"👤 REQUISITANTE: 🅶︎🅸︎🅾︎🆅︎🅰︎🅽︎🅸︎",
         f"📅 DATA/HORA: {datetime.now().strftime('%d/%m/%Y | %H:%M:%S')}",
         f"────────────────────",
         f"🛰 DNS ALVO: `{dns_alvo}` (🟢 ONLINE)",
-        f"⚡ MODO: {modo.upper()}",
-        f"────────────────────",
         f"👤 USUÁRIO: `{user}` | 🔑 SENHA: `{password}`",
         f"📅 VENCE: {exp_date} | 🗓 DIAS RESTANTES: {dias_rest}",
         f"👥 CONEXÕES ATIVAS: {info.get('active_connections', 0)}/{info.get('max_connections', 0)}",
@@ -180,9 +181,10 @@ async def executar_varredura(chat_id, context, link_m3u, modo="completa"):
     
     await context.bot.send_message(chat_id=chat_id, text="\n".join(relatorio), parse_mode='Markdown')
 
+    # Gera e envia o arquivo .txt com TODOS os espelhos
     if espelhos:
         nome_arquivo = f"espelhos_{user}_{int(time.time())}.txt"
-        conteudo_txt = f"# GIOVANI DETECTOR V15.8 - ESPELHOS DE OURO\n# Alvo: {dns_alvo} | Usuário: {user}\n\n"
+        conteudo_txt = f"# GIOVANI DETECTOR V15.9 - ESPELHOS DE OURO\n# Alvo: {dns_alvo} | Usuário: {user}\n\n"
         for e in espelhos:
             conteudo_txt += f"http://{e['dns']}/get.php?username={user}&password={password}&type=m3u_plus&output=ts\n"
         
@@ -201,47 +203,6 @@ async def executar_varredura(chat_id, context, link_m3u, modo="completa"):
         except:
             pass
 
-# ==========================================
-# 🎛 HANDLERS DE MENSAGENS E BOTÕES
-# ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 **Olá Giovani! O GIOVANI DETECTOR V15.8 TURBO está online.**\n\n📥 Envie o link M3U completo da linha que deseja escanear:")
-
-async def capturar_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text
-    if not ("username=" in texto or "password=" in texto):
-        return # Se não for um link, ignora
-
-    user_id = update.message.from_user.id
-    DADOS_USUARIO[user_id] = texto
-
-    teclado = [
-        [InlineKeyboardButton("🚀 Varredura Completa (11k+ sites)", callback_data="modo_completa")],
-        [InlineKeyboardButton("⚡ Varredura Rápida (Top 1.500 sites)", callback_data="modo_rapida")]
-    ]
-    reply_markup = InlineKeyboardMarkup(teclado)
-
-    await update.message.reply_text(
-        "⚙️ **Link capturado com sucesso!**\nEscolha o modo de varredura:",
-        reply_markup=reply_markup
-    )
-
-async def botoes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    chat_id = query.message.chat_id
-    link = DADOS_USUARIO.get(user_id)
-
-    if not link:
-        await query.edit_message_text(text="❌ Link não encontrado na memória. Envie o link M3U novamente.")
-        return
-
-    modo = "completa" if query.data == "modo_completa" else "rapida"
-    
-    await query.edit_message_text(text=f"🚀 Iniciando Varredura ({modo.upper()})... Aguarde.")
-    await executar_varredura(chat_id, context, link, modo=modo)
-
 async def erro_handler(update, context):
     print(f"⚠️ Erro no Telegram: {context.error}")
 
@@ -250,13 +211,15 @@ async def erro_handler(update, context):
 # ==========================================
 def main():
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    print("✅ GIOVANI DETECTOR V15.8 TURBO ONLINE")
+    print("✅ GIOVANI DETECTOR V15.9 ONLINE")
 
     app = ApplicationBuilder().token(TOKEN).build()
     
+    async def start(update, context):
+        await update.message.reply_text("👋 **Olá Giovani! O GIOVANI DETECTOR V15.9 está pronto.**\n\n📥 Basta enviar o link M3U para começar a análise imediatamente:")
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), capturar_link))
-    app.add_handler(CallbackQueryHandler(botoes_callback))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), processar_giovani_hibrido))
     app.add_error_handler(erro_handler)
 
     app.run_polling(drop_pending_updates=True)

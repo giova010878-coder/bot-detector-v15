@@ -22,7 +22,6 @@ def instalar_modulo(package, pip_name=None):
 
 instalar_modulo("telegram", "python-telegram-bot")
 instalar_modulo("aiohttp")
-instalar_modulo("nest_asyncio")
 instalar_modulo("dotenv", "python-dotenv")
 
 import asyncio
@@ -30,7 +29,6 @@ import re
 import time
 import json
 import socket
-import nest_asyncio
 import aiohttp
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, parse_qs
@@ -120,6 +118,13 @@ HEADERS = {
 
 consultas_ativas = {}
 user_timeout_tasks = {}
+scan_tasks = set()
+
+def finalizar_tarefa_scan(tarefa, chat_id):
+    scan_tasks.discard(tarefa)
+    consultas_ativas.pop(chat_id, None)
+    if not tarefa.cancelled() and tarefa.exception() is not None:
+        print(f"⚠️ Varredura encerrada com erro: {tarefa.exception()}")
 
 def salvar_grupo_id(chat_id, thread_id=None):
     with open(GRUPO_FILE, "w") as f:
@@ -288,16 +293,22 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         )
         ultima_atualizacao_progresso = 0.0
         
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=60, ttl_dns_cache=300)) as session:
+        # Limite conservador para evitar excesso de resolucoes DNS no Render.
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=30, ttl_dns_cache=300)) as session:
             teste_alvo = await testar_url_completo(session, dns_alvo, usuario, senha)
             status_dns_alvo, canais_alvo = ("ON" if teste_alvo["valido"] else "OFF"), teste_alvo.get("tv", 0)
             if teste_alvo["valido"]: dados_conta.update({k: teste_alvo.get(k, "N/A") for k in ["conexoes_ativas", "conexoes_maximas", "vencimento", "tipo_conta", "criacao", "formatos"]})
             
-            for b in range(0, total_banco, 100):
+            for b in range(0, total_banco, 30):
                 if not consultas_ativas.get(chat_id, True): break
-                lote = todas_dns_txt[b:b+100]
-                resultados = await asyncio.gather(*[testar_url_completo(session, u, usuario, senha) for u in lote])
+                lote = todas_dns_txt[b:b+30]
+                resultados = await asyncio.gather(
+                    *[testar_url_completo(session, u, usuario, senha) for u in lote],
+                    return_exceptions=True
+                )
                 for res in resultados:
+                    if isinstance(res, BaseException):
+                        continue
                     if res["valido"] and res["dns"] != dns_alvo and not any(c in res["dns"] for c in DOMINIOS_CURINGAS):
                         if res["tv"] > 5 and (canais_alvo == 0 or abs(res["tv"] - canais_alvo) <= 15 or res["tv"] >= 20):
                             espelhos_de_ouro.append(res)
@@ -417,7 +428,17 @@ async def receber_m3u(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not re.compile(r"http[s]?://.*get\.php\?[^ ]*username=[^&]+&password=[^&]+").search(texto):
         await update.message.reply_text("❌ Link M3U Inválido.")
         return GET_M3U_LINK
-    asyncio.create_task(processar_giovani_hibrido(texto, update.message.from_user.id, context, update.effective_chat.id))
+    chat_id = update.effective_chat.id
+    if consultas_ativas.get(chat_id):
+        await update.message.reply_text("⏳ Já existe uma varredura em andamento neste chat.")
+        return ConversationHandler.END
+    consultas_ativas[chat_id] = True
+    tarefa = asyncio.create_task(
+        processar_giovani_hibrido(texto, update.message.from_user.id, context, chat_id),
+        name=f"scan-{chat_id}"
+    )
+    scan_tasks.add(tarefa)
+    tarefa.add_done_callback(lambda concluida: finalizar_tarefa_scan(concluida, chat_id))
     return ConversationHandler.END
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -444,13 +465,30 @@ async def gerenciar_atualizacao_documento(update: Update, context: ContextTypes.
             total = len(extrair_hosts(f.read()))
         await update.message.reply_text(f"📥 **Banco Atualizado Manualmente!**\n📦 {total} domínios salvos em cache.", message_thread_id=thread_id)
 
+async def iniciar_aplicacao(application):
+    await baixar_lista_automatica(forçar=True)
+
+async def encerrar_aplicacao(application):
+    # Finaliza as varreduras antes de o python-telegram-bot fechar o event loop.
+    for chat_id in list(consultas_ativas):
+        consultas_ativas[chat_id] = False
+    tarefas = [tarefa for tarefa in scan_tasks if not tarefa.done()]
+    for tarefa in tarefas:
+        tarefa.cancel()
+    if tarefas:
+        await asyncio.gather(*tarefas, return_exceptions=True)
+
 def main():
     adquirir_bloqueio_de_instancia()
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    
-    nest_asyncio.apply()
-    asyncio.get_event_loop().run_until_complete(baixar_lista_automatica(forçar=True))
-    app = ApplicationBuilder().token(TOKEN).build()
+
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(iniciar_aplicacao)
+        .post_shutdown(encerrar_aplicacao)
+        .build()
+    )
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("dnschecker", dnschecker)],

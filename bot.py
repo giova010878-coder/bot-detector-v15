@@ -192,10 +192,17 @@ def extrair_hosts(texto):
 async def testar_url_completo(session, url_banco, user, password):
     url_base = f"http://{url_banco}/player_api.php?username={user}&password={password}"
     try:
-        async with session.get(url_base, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=3.5)) as response:
+        # TIMEOUT AGRESSIVO: 3.5s no total, máx 1.5s pra conectar.
+        timeout = aiohttp.ClientTimeout(total=3.5, connect=1.5, sock_read=2.0)
+        async with session.get(url_base, headers=HEADERS, timeout=timeout, allow_redirects=True) as response:
             if response.status not in [200, 301, 302, 403, 406, 429, 503]:
                 return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
-            texto_resposta = await response.text()
+            
+            # 🔥 O SEGREDO ESTÁ AQUI: Limitamos a leitura a 50KB! 
+            # Isso impede que o bot tente engolir um arquivo .TS de video e trave o servidor (OOM Killer).
+            corpo_bytes = await response.content.read(51200)
+            texto_resposta = corpo_bytes.decode('utf-8', errors='ignore')
+            
             is_valid = False
             active_cons, max_cons, exp_date = "N/A", "N/A", "N/A"
             created_at, is_trial, formatos = "N/A", "N/A", "N/A"
@@ -226,7 +233,15 @@ async def testar_url_completo(session, url_banco, user, password):
                 "vencimento": exp_date, "tv": total_tv, "vod": total_vod, "series": total_series,
                 "tipo_conta": is_trial, "criacao": created_at, "formatos": formatos
             }
-    except: return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
+    except: 
+        return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
+
+# Envolve a busca em um limite duro de tempo do asyncio para evitar travamentos inexplicáveis do aiohttp
+async def testar_url_blindado(session, u, usuario, senha):
+    try:
+        return await asyncio.wait_for(testar_url_completo(session, u, usuario, senha), timeout=5.0)
+    except Exception:
+        return {"dns": u, "valido": False, "tv": 0, "vod": 0, "series": 0}
 
 async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
     inicio = time.time()
@@ -256,7 +271,6 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         dns_alvo = re.sub(r'https?://', '', dados_entrada.strip().split('\n')[0]).split('/')[0].split('?')[0].strip().lower()
         if ":" in dns_alvo: dns_alvo = dns_alvo.split(":")[0]
 
-    # Busca de IP Assíncrona (Evita congelar o bot inteiro)
     loop = asyncio.get_running_loop()
     try:
         dados_rede["ip"] = await loop.run_in_executor(None, socket.gethostbyname, dns_alvo)
@@ -294,9 +308,10 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         )
         ultima_atualizacao_progresso = 0.0
         
-        # Limite aumentado para 100 para matar o Efeito Zumbi.
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)) as session:
-            teste_alvo = await testar_url_completo(session, dns_alvo, usuario, senha)
+        # Conector calibrado para não explodir os limites do OS e respeitar cache de DNS
+        conector_seguro = aiohttp.TCPConnector(limit=50, limit_per_host=5, ttl_dns_cache=300)
+        async with aiohttp.ClientSession(connector=conector_seguro) as session:
+            teste_alvo = await testar_url_blindado(session, dns_alvo, usuario, senha)
             status_dns_alvo, canais_alvo = ("ON" if teste_alvo["valido"] else "OFF"), teste_alvo.get("tv", 0)
             if teste_alvo["valido"]: dados_conta.update({k: teste_alvo.get(k, "N/A") for k in ["conexoes_ativas", "conexoes_maximas", "vencimento", "tipo_conta", "criacao", "formatos"]})
             
@@ -304,24 +319,20 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
                 if not consultas_ativas.get(chat_id, True): break
                 lote = todas_dns_txt[b:b+30]
                 
-                # Gather cuida das tarefas de forma limpa, respeitando os 3.5s do ClientTimeout.
-                tarefas_lote = [
-                    testar_url_completo(session, u, usuario, senha)
-                    for u in lote
-                ]
-                
+                # Executa o lote de forma blindada contra zumbis
+                tarefas_lote = [testar_url_blindado(session, u, usuario, senha) for u in lote]
                 resultados = await asyncio.gather(*tarefas_lote, return_exceptions=True)
                 
                 for res in resultados:
-                    if isinstance(res, BaseException):
-                        continue
+                    if isinstance(res, BaseException): continue
                     if res["valido"] and res["dns"] != dns_alvo and not any(c in res["dns"] for c in DOMINIOS_CURINGAS):
                         if res["tv"] > 5 and (canais_alvo == 0 or abs(res["tv"] - canais_alvo) <= 15 or res["tv"] >= 20):
                             espelhos_de_ouro.append(res)
 
                 processados = min(b + len(lote), total_banco)
                 agora_progresso = time.monotonic()
-                if agora_progresso - ultima_atualizacao_progresso >= 3 or processados == total_banco:
+                # 🛡️ Aumentei para 5 segundos para não tomar Block do Telegram por flood de edições
+                if agora_progresso - ultima_atualizacao_progresso >= 5 or processados == total_banco:
                     percentual = int((processados / total_banco) * 100) if total_banco else 100
                     blocos = min(10, percentual // 10)
                     barra = "█" * blocos + "░" * (10 - blocos)
@@ -335,7 +346,7 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
                         )
                         ultima_atualizacao_progresso = agora_progresso
                     except Exception as erro_progresso:
-                        print(f"⚠️ Nao foi possivel atualizar o progresso: {erro_progresso}")
+                        pass # Silencia erros de timeout do telegram na ediçao
 
         try: await progresso_msg.delete()
         except: pass
@@ -362,7 +373,6 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         ]
         if espelhos_de_ouro:
             relatorio.append(f"🔥 ESPELHOS DE OURO CONFIRMADOS ({len(espelhos_de_ouro)}):")
-            # Reduzido para limite de 30 para não ultrapassar limite de mensagem do Telegram
             for item in espelhos_de_ouro[:30]: relatorio.append(f" └🔗 `{item['dns']}` 📺 🔥 LIBERADA")
         else:
             relatorio.append(" ❌ Nenhum espelho válido com canais ativos respondeu para este login.")

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-import os, sys, subprocess, asyncio, re, time, json, socket, aiohttp
+import os, sys, subprocess, threading, asyncio, re, time, json, socket, aiohttp
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, filters
 from dotenv import load_dotenv
@@ -9,9 +10,31 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==========================================
+# 🌐 SERVIDOR WEB FALSO PARA O RENDER
+# ==========================================
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        corpo = b"Bot do Giovani esta ONLINE e operante!"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(corpo)))
+        self.end_headers()
+        self.wfile.write(corpo)
+    def log_message(self, format, *args):
+        return
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server.serve_forever()
+
+# ==========================================
 # ⚙️ CONFIGURAÇÕES E CONSTANTES
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TOKEN:
+    sys.exit(1)
+
 ARQUIVO_BANCO = "lista_dns.txt"
 GET_M3U_LINK = 0
 
@@ -44,13 +67,22 @@ async def testar_url(session, dns, user, password):
 async def processar_giovani_hibrido(dados, user_id, context, chat_id):
     inicio = time.time()
     params = parse_qs(urlparse(dados).query)
-    user, password = params.get('username', [''])[0], params.get('password', [''])[0]
+    user = params.get('username', [''])[0]
+    password = params.get('password', [''])[0]
+    
+    if not user or not password:
+        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto.")
+        return
+
     dns_alvo = urlparse(dados).hostname
     
-    with open(ARQUIVO_BANCO, "r") as f: todas_dns = extrair_hosts(f.read())
+    if not os.path.exists(ARQUIVO_BANCO):
+        with open(ARQUIVO_BANCO, "w") as f: f.write("")
+        
+    with open(ARQUIVO_BANCO, "r", encoding="utf-8", errors="ignore") as f: 
+        todas_dns = extrair_hosts(f.read())
     
     espelhos = []
-    # Aceleração: Lotes de 250
     connector = aiohttp.TCPConnector(limit=250)
     async with aiohttp.ClientSession(connector=connector) as session:
         for i in range(0, len(todas_dns), 250):
@@ -60,10 +92,15 @@ async def processar_giovani_hibrido(dados, user_id, context, chat_id):
             for idx, res in enumerate(resultados):
                 if res: espelhos.append({"dns": lote[idx], "data": res})
 
-    # Formatação do Relatório
     info = espelhos[0]["data"]["user_info"] if espelhos else {}
-    exp_date = datetime.fromtimestamp(int(info.get("exp_date", 0))).strftime("%d/%m/%Y") if info.get("exp_date") else "N/A"
-    dias_rest = (datetime.fromtimestamp(int(info.get("exp_date"))) - datetime.now()).days if info.get("exp_date") else "N/A"
+    exp_timestamp = info.get("exp_date")
+    
+    exp_date = "N/A"
+    dias_rest = "N/A"
+    if exp_timestamp and str(exp_timestamp).isdigit():
+        dt_venc = datetime.fromtimestamp(int(exp_timestamp))
+        exp_date = dt_venc.strftime("%d/%m/%Y")
+        dias_rest = (dt_venc - datetime.now()).days
 
     relatorio = [
         f"🛡 **GIOVANI DETECTOR V15.7 (BANCO 2)**",
@@ -81,22 +118,35 @@ async def processar_giovani_hibrido(dados, user_id, context, chat_id):
         f"🔥 ESPELHOS DE OURO ({len(espelhos)}):"
     ]
     
-    for e in espelhos[:10]:
+    for e in espelhos[:15]:
         relatorio.append(f" └🔗 `http://{e['dns']}/get.php?username={user}&password={password}&type=m3u_plus&output=ts` - {int((time.time()-inicio)*10)%500+100}ms 📺 🔥")
     
+    if not espelhos:
+        relatorio.append(" ❌ Nenhum espelho válido encontrado.")
+
     relatorio.append(f"────────────────────")
     relatorio.append(f"⚡️ TEMPO TOTAL: {round(time.time() - inicio, 2)}s | 📦 LIDOS: {len(todas_dns)} sites")
     
     await context.bot.send_message(chat_id=chat_id, text="\n".join(relatorio), parse_mode='Markdown')
 
+async def erro_handler(update, context):
+    print(f"⚠️ Erro no Telegram: {context.error}")
+
 # ==========================================
 # 🏁 MAIN
 # ==========================================
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("dnschecker", lambda u, c: dnschecker_start(u, c)))
+    # Inicia o servidor HTTP falso em segundo plano para preencher a porta do Render
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
+    app = ApplicationBuilder().token(TOKEN).post_init(lambda a: print("✅ GIOVANI DETECTOR V15.7 ONLINE")).build()
+    
+    app.add_handler(CommandHandler("dnschecker", lambda u, c: u.message.reply_text("📥 Envie o link M3U completo para iniciar a varredura.")))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u, c: processar_giovani_hibrido(u.message.text, u.message.from_user.id, c, u.message.chat_id)))
-    app.run_polling()
+    app.add_error_handler(erro_handler)
+
+    # drop_pending_updates=True resolve o conflito matando sessões travadas anteriores
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()

@@ -62,7 +62,7 @@ async def testar_url(session, dns, user, password):
     return None
 
 # ==========================================
-# 🚀 NÚCLEO DE PROCESSAMENTO (FORMATO V15.7)
+# 🚀 NÚCLEO DE PROCESSAMENTO COM % EM TEMPO REAL
 # ==========================================
 async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dados = update.message.text
@@ -96,15 +96,52 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
     with open(ARQUIVO_BANCO, "r", encoding="utf-8", errors="ignore") as f: 
         todas_dns = extrair_hosts(f.read())
     
+    total_sites = len(todas_dns)
+    
+    # Envia mensagem inicial de status para ir atualizando a porcentagem
+    msg_status = await context.bot.send_message(
+        chat_id=chat_id, 
+        text=f"🔍 **Iniciando varredura em {total_sites} sites...**\n⏳ Progresso: 0%"
+    )
+
     espelhos = []
     connector = aiohttp.TCPConnector(limit=250)
+    
     async with aiohttp.ClientSession(connector=connector) as session:
-        for i in range(0, len(todas_dns), 250):
-            lote = todas_dns[i:i+250]
+        tamanho_lote = 250
+        total_lotes = (total_sites + tamanho_lote - 1) // tamanho_lote
+        lote_atual = 0
+
+        for i in range(0, total_sites, tamanho_lote):
+            lote = todas_dns[i:i + tamanho_lote]
+            lote_atual += 1
+            
             tarefas = [testar_url(session, dns, user, password) for dns in lote]
             resultados = await asyncio.gather(*tarefas)
+            
             for idx, res in enumerate(resultados):
-                if res: espelhos.append({"dns": lote[idx], "data": res})
+                if res: 
+                    espelhos.append({"dns": lote[idx], "data": res})
+
+            # Calcula a porcentagem atual
+            porcentagem = int((lote_atual / total_lotes) * 100)
+            sites_testados = min(i + tamanho_lote, total_sites)
+
+            # Tenta atualizar a mensagem de progresso (com tratamento caso falhe por limite do Telegram)
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_status.message_id,
+                    text=f"🔍 **Varredura em Andamento...**\n📊 Progresso: **{porcentagem}%** ({sites_testados}/{total_sites} sites)\n🔥 Espelhos encontrados até agora: {len(espelhos)}"
+                )
+            except Exception:
+                pass
+
+    # Apaga a mensagem de progresso
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg_status.message_id)
+    except Exception:
+        pass
 
     info = espelhos[0]["data"]["user_info"] if espelhos else {}
     exp_timestamp = info.get("exp_date")
@@ -139,7 +176,7 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
         relatorio.append(" ❌ Nenhum espelho válido encontrado.")
 
     relatorio.append(f"────────────────────")
-    relatorio.append(f"⚡️ TEMPO TOTAL: {round(time.time() - inicio, 2)}s | 📦 LIDOS: {len(todas_dns)} sites")
+    relatorio.append(f"⚡️ TEMPO TOTAL: {round(time.time() - inicio, 2)}s | 📦 LIDOS: {total_sites} sites")
     
     await context.bot.send_message(chat_id=chat_id, text="\n".join(relatorio), parse_mode='Markdown')
 
@@ -150,7 +187,6 @@ async def erro_handler(update, context):
 # 🏁 MAIN
 # ==========================================
 def main():
-    # Inicia o servidor HTTP em background para agradar o Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
     print("✅ GIOVANI DETECTOR V15.7 ONLINE")
 

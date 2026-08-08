@@ -132,16 +132,16 @@ async def processar_giovani_hibrido(dados, user_id, context, chat_id):
 async def erro_handler(update, context):
     print(f"⚠️ Erro no Telegram: {context.error}")
 
-async def post_init_callback(application):
-    print("✅ GIOVANI DETECTOR V15.7 ONLINE")
-
 # ==========================================
 # 🏁 MAIN
 # ==========================================
 def main():
+    # Inicia o servidor web falso para o Render em segundo plano
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    app = ApplicationBuilder().token(TOKEN).post_init(post_init_callback).build()
+    print("✅ GIOVANI DETECTOR V15.7 ONLINE")
+
+    app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("dnschecker", lambda u, c: u.message.reply_text("📥 Envie o link M3U completo para iniciar a varredura.")))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u, c: processar_giovani_hibrido(u.message.text, u.message.from_user.id, c, u.message.chat_id)))

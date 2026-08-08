@@ -51,25 +51,28 @@ def extrair_hosts(texto):
 
 async def testar_url(session, dns, user, password):
     url = f"http://{dns}/player_api.php?username={user}&password={password}"
+    t_inicio = time.time()
     try:
         timeout = aiohttp.ClientTimeout(total=4.0)
         async with session.get(url, timeout=timeout) as resp:
-            if resp.status != 200: return None
+            t_fim = time.time()
+            latencia = int((t_fim - t_inicio) * 1000)
+            if resp.status != 200: return None, 0
             data = await resp.json()
             if "user_info" in data and str(data["user_info"].get("status")).lower() in ["active", "1"]:
-                return data
+                return data, latencia
     except: pass
-    return None
+    return None, 0
 
 # ==========================================
-# 🚀 NÚCLEO DE PROCESSAMENTO BLINDADO V15.9
+# 🚀 NÚCLEO DE PROCESSAMENTO V15.10 (COM PING E SEM TXT)
 # ==========================================
 async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dados = update.message.text
     chat_id = update.message.chat_id
     
     if not ("username=" in dados or "password=" in dados):
-        return # Ignora mensagens que não sejam links M3U
+        return 
 
     inicio = time.time()
     dados_limpos = dados.strip()
@@ -86,7 +89,7 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
         if match_pass: password = match_pass.group(1)
 
     if not user or not password:
-        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto. Certifique-se de enviar o link contendo username e password.")
+        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto.")
         return
 
     dns_alvo = parsed_url.hostname or dados_limpos.split('/')[2].split(':')[0]
@@ -101,11 +104,10 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
     
     msg_status = await context.bot.send_message(
         chat_id=chat_id, 
-        text=f"🚀 **GIOVANI DETECTOR V15.9**\n📦 Varredura iniciada em {total_sites} sites...\n⏳ Progresso: 0%"
+        text=f"🚀 **GIOVANI DETECTOR V15.10**\n📦 Varredura iniciada em {total_sites} sites...\n⏳ Progresso: 0%"
     )
 
     espelhos = []
-    # Limitamos a 200 conexões simultâneas para estabilidade total (evita bloqueio por firewall)
     connector = aiohttp.TCPConnector(limit=200, force_close=True)
     
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -120,9 +122,9 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
             tarefas = [testar_url(session, dns, user, password) for dns in lote]
             resultados = await asyncio.gather(*tarefas)
             
-            for idx, res in enumerate(resultados):
+            for idx, (res, latencia) in enumerate(resultados):
                 if res: 
-                    espelhos.append({"dns": lote[idx], "data": res})
+                    espelhos.append({"dns": lote[idx], "data": res, "ping": latencia})
 
             porcentagem = int((lote_atual / total_lotes) * 100)
             sites_testados = min(i + tamanho_lote, total_sites)
@@ -141,6 +143,9 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
     except Exception:
         pass
 
+    # Ordena os espelhos do menor ping para o maior
+    espelhos = sorted(espelhos, key=lambda x: x['ping'])
+
     info = espelhos[0]["data"]["user_info"] if espelhos else {}
     exp_timestamp = info.get("exp_date")
     
@@ -153,8 +158,8 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
 
     tempo_total = round(time.time() - inicio, 2)
 
-    relatorio = [
-        f"🛡 **GIOVANI DETECTOR V15.9 TURBO**",
+    cabecalho = [
+        f"🛡 **GIOVANI DETECTOR V15.10**",
         f"────────────────────",
         f"👤 REQUISITANTE: 🅶︎🅸︎🅾︎🆅︎🅰︎🅽︎🅸︎",
         f"📅 DATA/HORA: {datetime.now().strftime('%d/%m/%Y | %H:%M:%S')}",
@@ -167,41 +172,29 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
         f"🔥 ESPELHOS DE OURO ENCONTRADOS: {len(espelhos)}"
     ]
     
-    for e in espelhos[:15]:
-        relatorio.append(f" └🔗 `http://{e['dns']}/get.php?username={user}&password={password}&type=m3u_plus&output=ts` - 📺 🔥")
+    # Monta a lista completa com ping
+    linhas_espelhos = []
+    for e in espelhos:
+        linhas_espelhos.append(f" └🔗 `http://{e['dns']}/get.php?username={user}&password={password}&type=m3u_plus&output=ts` - {e['ping']}ms 📺 🔥")
     
-    if len(espelhos) > 15:
-        relatorio.append(f" _...e mais {len(espelhos) - 15} espelhos no arquivo TXT abaixo._")
-
     if not espelhos:
-        relatorio.append(" ❌ Nenhum espelho válido encontrado.")
+        linhas_espelhos.append(" ❌ Nenhum espelho válido encontrado.")
 
-    relatorio.append(f"────────────────────")
-    relatorio.append(f"⚡️ TEMPO TOTAL: {tempo_total}s | 📦 LIDOS: {total_sites} sites")
+    rodape = [
+        f"────────────────────",
+        f"⚡️ TEMPO TOTAL: {tempo_total}s | 📦 LIDOS: {total_sites} sites"
+    ]
+
+    # Envia dividindo em mensagens caso ultrapasse o limite do Telegram (4096 caracteres)
+    mensagem_atual = "\n".join(cabecalho) + "\n"
+    for linha in linhas_espelhos:
+        if len(mensagem_atual) + len(linha) > 3900:
+            await context.bot.send_message(chat_id=chat_id, text=mensagem_atual, parse_mode='Markdown')
+            mensagem_atual = ""
+        mensagem_atual += linha + "\n"
     
-    await context.bot.send_message(chat_id=chat_id, text="\n".join(relatorio), parse_mode='Markdown')
-
-    # Gera e envia o arquivo .txt com TODOS os espelhos
-    if espelhos:
-        nome_arquivo = f"espelhos_{user}_{int(time.time())}.txt"
-        conteudo_txt = f"# GIOVANI DETECTOR V15.9 - ESPELHOS DE OURO\n# Alvo: {dns_alvo} | Usuário: {user}\n\n"
-        for e in espelhos:
-            conteudo_txt += f"http://{e['dns']}/get.php?username={user}&password={password}&type=m3u_plus&output=ts\n"
-        
-        with open(nome_arquivo, "w", encoding="utf-8") as f:
-            f.write(conteudo_txt)
-            
-        with open(nome_arquivo, "rb") as f:
-            await context.bot.send_document(
-                chat_id=chat_id,
-                document=f,
-                filename=nome_arquivo,
-                caption=f"📁 **Lista Completa ({len(espelhos)} espelhos de ouro)**"
-            )
-        try:
-            os.remove(nome_arquivo)
-        except:
-            pass
+    mensagem_atual += "\n".join(rodape)
+    await context.bot.send_message(chat_id=chat_id, text=mensagem_atual, parse_mode='Markdown')
 
 async def erro_handler(update, context):
     print(f"⚠️ Erro no Telegram: {context.error}")
@@ -211,12 +204,12 @@ async def erro_handler(update, context):
 # ==========================================
 def main():
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    print("✅ GIOVANI DETECTOR V15.9 ONLINE")
+    print("✅ GIOVANI DETECTOR V15.10 ONLINE")
 
     app = ApplicationBuilder().token(TOKEN).build()
     
     async def start(update, context):
-        await update.message.reply_text("👋 **Olá Giovani! O GIOVANI DETECTOR V15.9 está pronto.**\n\n📥 Basta enviar o link M3U para começar a análise imediatamente:")
+        await update.message.reply_text("👋 **Olá Giovani! O GIOVANI DETECTOR V15.10 está pronto.**\n\n📥 Envie o link M3U para começar a análise:")
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), processar_giovani_hibrido))

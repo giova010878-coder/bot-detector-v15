@@ -135,17 +135,25 @@ async def erro_handler(update, context):
 # ==========================================
 # 🏁 MAIN
 # ==========================================
+# ==========================================
+# 🏁 MAIN CORRIGIDO (Com /start)
+# ==========================================
 def main():
-    # Inicia o servidor web falso para o Render em segundo plano
     threading.Thread(target=run_dummy_server, daemon=True).start()
-
     print("✅ GIOVANI DETECTOR V15.7 ONLINE")
 
     app = ApplicationBuilder().token(TOKEN).build()
     
+    # Adicionando o comando start para testar a resposta
+    async def start(update, context):
+        await update.message.reply_text("👋 Olá Giovani! O GIOVANI DETECTOR V15.7 está pronto.\nEnvie um link M3U para começar a análise.")
+
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dnschecker", lambda u, c: u.message.reply_text("📥 Envie o link M3U completo para iniciar a varredura.")))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), lambda u, c: processar_giovani_hibrido(u.message.text, u.message.from_user.id, c, u.message.chat_id)))
     app.add_error_handler(erro_handler)
+
+    app.run_polling(drop_pending_updates=True)
 
     app.run_polling(drop_pending_updates=True)
 

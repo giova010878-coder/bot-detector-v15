@@ -1,4 +1,3 @@
 python-telegram-bot
 aiohttp
-nest-asyncio
 python-dotenv

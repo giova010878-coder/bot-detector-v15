@@ -10,16 +10,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==========================================
-# 🌐 SERVIDOR WEB FALSO PARA O RENDER
+# 🌐 SERVIDOR WEB PARA O RENDER (MANTÉM VIVO)
 # ==========================================
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        corpo = b"Bot do Giovani esta ONLINE e operante!"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(corpo)))
         self.end_headers()
-        self.wfile.write(corpo)
+        self.wfile.write(b"OK")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
     def log_message(self, format, *args):
         return
 
@@ -67,7 +68,7 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
     dados = update.message.text
     chat_id = update.message.chat_id
     
-    print(f"📥 MENSAGEM RECEBIDA DO TELEGRAM: {dados}") # Log para ver na tela do Render se chegou algo
+    print(f"📥 MENSAGEM RECEBIDA: {dados}")
 
     inicio = time.time()
     dados_limpos = dados.strip()
@@ -84,7 +85,7 @@ async def processar_giovani_hibrido(update: Update, context: ContextTypes.DEFAUL
         if match_pass: password = match_pass.group(1)
 
     if not user or not password:
-        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto. Certifique-se de enviar o link contendo username e password.")
+        await context.bot.send_message(chat_id=chat_id, text="❌ Link M3U Inválido ou incompleto. Envie o link contendo username e password.")
         return
 
     dns_alvo = parsed_url.hostname or dados_limpos.split('/')[2].split(':')[0]
@@ -149,6 +150,7 @@ async def erro_handler(update, context):
 # 🏁 MAIN
 # ==========================================
 def main():
+    # Inicia o servidor HTTP em background para agradar o Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
     print("✅ GIOVANI DETECTOR V15.7 ONLINE")
 

@@ -195,8 +195,8 @@ def extrair_hosts(texto):
 async def testar_url_completo(session, url_banco, user, password):
     url_base = f"http://{url_banco}/player_api.php?username={user}&password={password}"
     try:
-        # 🔥 CORREÇÃO 2: Timeout aumentado para evitar descartar servidores lentos
-        timeout = aiohttp.ClientTimeout(total=8.0, connect=3.0, sock_read=5.0)
+        # 🔥 ACELERAÇÃO: Reduzido de 8.0 para 5.0 (corta os mortos rápido)
+        timeout = aiohttp.ClientTimeout(total=5.0, connect=2.0, sock_read=3.0)
         async with session.get(url_base, headers=HEADERS, timeout=timeout, allow_redirects=True) as response:
             if response.status not in [200, 301, 302, 403, 406, 429, 503]:
                 return {"dns": url_banco, "valido": False, "tv": 0, "vod": 0, "series": 0}
@@ -239,8 +239,8 @@ async def testar_url_completo(session, url_banco, user, password):
 
 async def testar_url_blindado(session, u, usuario, senha):
     try:
-        # 🔥 CORREÇÃO 2.1: Guilhotina estendida de 3.0s para 10.0s
-        return await asyncio.wait_for(testar_url_completo(session, u, usuario, senha), timeout=10.0)
+        # 🔥 ACELERAÇÃO: Guilhotina apertada para 5.5s
+        return await asyncio.wait_for(testar_url_completo(session, u, usuario, senha), timeout=5.5)
     except Exception:
         return {"dns": u, "valido": False, "tv": 0, "vod": 0, "series": 0}
 
@@ -313,16 +313,17 @@ async def processar_giovani_hibrido(dados_entrada, user_id, context, chat_id):
         )
         ultima_atualizacao_progresso = 0.0
         
-        # 🔥 CORREÇÃO 4: Limite ajustado de 150 para 80 para garantir estabilidade e evitar Timeout no seu próprio servidor
-        conector_seguro = aiohttp.TCPConnector(limit=80, limit_per_host=3, ttl_dns_cache=300)
+        # 🔥 ACELERAÇÃO: Limite ampliado para 250 conexões simultâneas
+        conector_seguro = aiohttp.TCPConnector(limit=250, limit_per_host=3, ttl_dns_cache=300)
         async with aiohttp.ClientSession(connector=conector_seguro) as session:
             teste_alvo = await testar_url_blindado(session, dns_alvo, usuario, senha)
             status_dns_alvo, canais_alvo = ("ON" if teste_alvo["valido"] else "OFF"), teste_alvo.get("tv", 0)
             if teste_alvo["valido"]: dados_conta.update({k: teste_alvo.get(k, "N/A") for k in ["conexoes_ativas", "conexoes_maximas", "vencimento", "tipo_conta", "criacao", "formatos"]})
             
-            for b in range(0, total_banco, 100):
+            # 🔥 ACELERAÇÃO: Pulando de 250 em 250 para voar pela lista de 11k
+            for b in range(0, total_banco, 250):
                 if not consultas_ativas.get(chat_id, True): break
-                lote = todas_dns_txt[b:b+100]
+                lote = todas_dns_txt[b:b+250]
                 
                 tarefas_lote = [testar_url_blindado(session, u, usuario, senha) for u in lote]
                 resultados = await asyncio.gather(*tarefas_lote, return_exceptions=True)
